@@ -1,0 +1,8 @@
+  task_info:
+    trajectory_type: circle
+    num_cycles: 2
+    trajectory_plane: 'xz'
+    trajectory_position_offset: [0, 1]
+    trajectory_scale: 1.0
+    proj_point: [0, 0, 0.5]
+    proj_normal: [0, 1, 1]

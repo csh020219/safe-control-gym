@@ -3,6 +3,8 @@ task_config:
   ctrl_freq: 50
   pyb_freq: 1000
   gui: False
+  record: True
+  #render_mode: human
   physics: pyb
   quad_type: 3
 
@@ -60,14 +62,14 @@ task_config:
 
   task: traj_tracking
   task_info:
-    trajectory_type: figure8
-    num_cycles: 1
-    trajectory_plane: 'xz'
-    trajectory_position_offset: [0, 1]
-    trajectory_scale: 0.75
+    trajectory_type: square
+    num_cycles: 3
+    trajectory_plane: 'xy'
+    trajectory_position_offset: [0, 0]
+    trajectory_scale: 1.0
     proj_point: [0, 0, 0.5]
-    proj_normal: [0, 1, 1]
-  episode_len_sec: 6
+    proj_normal: [0, 0, 1]
+  episode_len_sec: 15
   cost: quadratic
   # Match MPC weights
   rew_state_weight: [5.0, 0.1, 5.0, 0.1, 5.0, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]

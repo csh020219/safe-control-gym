@@ -23,5 +23,5 @@ python3 ./mpc_experiment.py \
     --task ${SYS_NAME} \
     --algo ${ALGO} \
     --overrides \
-        ./config_overrides/${SYS}/${SYS}_${TASK}.yaml \
-        ./config_overrides/${SYS}/${ALGO}_${SYS}_${TASK}.yaml
+        ./config_overrides/quadrotor_3D/quad_3D_tracking_basic.yaml \
+        ./config_overrides/quadrotor_3D/linear_mpc_circle_stable.yaml

@@ -1,0 +1,6 @@
+  task_info:
+    trajectory_type: circle
+    num_cycles: 2.5
+    trajectory_plane: 'xy'
+    trajectory_position_offset: [0, 1.0]
+    trajectory_scale: 0.9 

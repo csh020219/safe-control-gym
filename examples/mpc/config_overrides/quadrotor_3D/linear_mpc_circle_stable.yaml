@@ -1,0 +1,38 @@
+# Stable Linear MPC for Circle Trajectory
+algo: linear_mpc
+
+algo_config:
+  # 더 길게 내다보며(50 Hz 기준) 원 궤적의 곡률을 충분히 예측
+  horizon: 20
+
+  # 입력 페널티는 과하지 않게 (너무 크면 추종이 굼떠지고 QP가 빡빡해짐)
+  r_mpc:
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+
+  # 상태 가중치 (순서: [x, x_dot, y, y_dot, z, z_dot, phi, theta, psi, p, q, r])
+  # 위치·고도 추종 강화, 속도는 완만, 자세·각속도는 과하게 누르지 않음
+  q_mpc:
+    - 5.0
+    - 0.1
+    - 5.0
+    - 0.1
+    - 5.0
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+
+  # Prior info
+  prior_info:
+    prior_prop: null
+    randomize_prior_prop: False
+    prior_prop_rand_info: null
+
+  warmstart: True
+  solver: qrqp

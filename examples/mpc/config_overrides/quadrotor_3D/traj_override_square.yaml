@@ -1,0 +1,10 @@
+task_config:
+  task_info:
+    trajectory_type: square   # 지원 타입 중 하나: [circle, square, figure8]
+    trajectory_plane: 'xy'    # 사각 궤적 평면 ('xy', 'xz', 'yz' 중 선택)
+    trajectory_position_offset: [0.0, 0.0]  # 중심 기준점
+    trajectory_scale: 0.8
+    num_cycles: 1
+  episode_len_sec: 20
+
+

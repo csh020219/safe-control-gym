@@ -109,4 +109,4 @@ def post_analysis(state_stack, input_stack, env):
 
 
 if __name__ == '__main__':
-    run()
+    run(gui=True)

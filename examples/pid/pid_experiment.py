@@ -126,4 +126,4 @@ def run(gui=True, n_episodes=1, n_steps=None, save_data=False):
 
 
 if __name__ == '__main__':
-    run()
+    run(gui=True)
