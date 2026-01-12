@@ -1,0 +1,62 @@
+# MPCC Algorithm Configuration for Quadrotor 2D Tracking
+# Using Environment Trajectory (env.X_GOAL) instead of built-in track
+
+algo: mpcc
+
+algo_config:
+  # ═══════════════════════════════════════════════════════════
+  # USE ENVIRONMENT TRAJECTORY (env.X_GOAL)
+  # ═══════════════════════════════════════════════════════════
+  verbose: true
+
+  use_env_trajectory: true  # Enable conversion from env.X_GOAL to waypoints
+  env_trajectory_sample_rate: 10  # Waypoints per second (default: 10)
+  
+  # Track configuration (ignored when use_env_trajectory=true)
+  # track_name: 'circle'  # This would use MPCC's built-in circle
+  track_width: 0.5
+  track_density: 100
+  track_closed: true
+  track_cache_dir: 'tracks'
+  fixed_altitude: 1.0
+
+  # MPC parameters
+  horizon: 20
+
+  # ═══════════════════════════════════════════════════════════
+  # MPCC Cost Weights (EXTERNAL cost type with env dynamics)
+  # Cost = Qc * e_c² + Ql * e_l² - Q_theta * v_theta 
+  #        + R * (T - T_hover)² + Q_pitch * pitch² + Q_pitch_dot * pitch_dot²
+  # ═══════════════════════════════════════════════════════════
+  # Path tracking weights (BALANCED for stability + performance)
+  # MPCC Cost: J = Qc * e_c² + Ql * e_l² - Q_theta * v_theta + R * u²
+  # NOTE: v_theta는 maximize되므로, q_v_theta를 매우 작게 설정하여 상한값 도달 방지
+  # Guidelines: q_lag >> q_contour (10-100x), q_v_theta 매우 작게 (0.001-0.01)로 v_theta 조절
+  q_contour: 30.0     # Contouring error penalty (perpendicular to path)
+  q_lag: 750.0        # Lag error penalty (tangential, 25x q_contour)
+  q_v_theta: 0.01     # Progress rate REWARD (매우 작게 설정하여 v_theta 변화 관찰)
+
+  # Control cost weights (thrust deviation from hover)
+  # Higher r_accel = smoother control inputs (less oscillation)
+  # NOTE: r_accel을 높여서 제어 노력 제약을 강화하면 v_theta가 상한값에 도달하지 않을 수 있음
+  r_accel: [10.0, 10.0]   # R_T: 높은 값으로 설정하여 v_theta 조절 여유 증가
+  r_yaw_rate: 0.0         # Not used
+
+  # Path progress rate limits
+  # NOTE: v_theta가 상한값에 고정되지 않도록 낮은 상한값 설정
+  # 값 변화를 관찰하기 위해 중간값으로 설정 (1.0-1.5 권장)
+  v_theta_limits: [0.1, 1.2]  # 상한값을 1.2로 낮춰서 v_theta가 변화하는지 확인
+
+  # Solver options
+  use_terminal_cost: true
+  qp_solver: 'PARTIAL_CONDENSING_HPIPM'
+  integrator_type: 'ERK'
+  nlp_solver_type: 'SQP'
+  nlp_solver_max_iter: 20
+  qp_solver_iter_max: 50
+  verbose: true
+
+  # Prior info (compatibility with MPC structure)
+  prior_info: null
+  warmstart: false
+

@@ -594,6 +594,8 @@ class BenchmarkEnv(gym.Env, ABC):
         elif traj_type == 'square':
             coords_a, coords_b, coords_a_dot, coords_b_dot = self._square(
                 t, traj_period, scaling)
+        #elif traj_type == 'simple-oval':
+        #    pass
         # Initialize position and velocity references.
         pos_ref = np.zeros((3,))
         vel_ref = np.zeros((3,))

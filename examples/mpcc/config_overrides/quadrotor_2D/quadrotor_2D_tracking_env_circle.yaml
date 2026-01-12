@@ -1,0 +1,78 @@
+# Quadrotor 2D Tracking Task Configuration
+# Using Environment Trajectory (env.X_GOAL) with circle trajectory
+
+task_config:
+  seed: 1337
+  ctrl_freq: 50
+  pyb_freq: 1000
+  gui: True
+  physics: pyb
+  quad_type: 2
+
+  # Initial state: Set to be on the trajectory
+  # Figure8: scale 0.7, center at (0, 1.0)
+  # Starting at rightmost point of figure8: (0.7, 1.0)
+  init_state:
+    init_x: 0.7  # Rightmost point on figure8
+    init_x_dot: 0.0
+    init_z: 1.0  # Center height
+    init_z_dot: 0.0
+    init_theta: 0.0
+    init_theta_dot: 0.0
+  
+  # Initial state randomization (disabled - using fixed position on circle)
+  init_state_randomization_info:
+    init_x:
+      distrib: 'uniform'
+      low: -0.5
+      high: 0.5
+    init_x_dot:
+      distrib: 'uniform'
+      low: -0.1
+      high: 0.1
+    init_z:
+      distrib: 'uniform'
+      low: 0.8
+      high: 1.2
+    init_z_dot:
+      distrib: 'uniform'
+      low: -0.1
+      high: 0.1
+    init_theta:
+      distrib: 'uniform'
+      low: -0.1
+      high: 0.1
+    init_theta_dot:
+      distrib: 'uniform'
+      low: -0.1
+      high: 0.1
+  randomized_init: false
+  randomized_inertial_prop: false
+
+  # ═══════════════════════════════════════════════════════════
+  # ENVIRONMENT TRAJECTORY CONFIGURATION
+  # This generates env.X_GOAL which MPCC will convert to waypoints
+  # ═══════════════════════════════════════════════════════════
+  task: traj_tracking
+  task_info:
+    trajectory_type: figure8  # CHANGED: figure8 to test varying curvature
+    num_cycles: 2
+    trajectory_plane: 'xz'
+    trajectory_position_offset: [0, 1.0]
+    trajectory_scale: 0.7  # Smaller for safety (figure8 is larger)
+
+  episode_len_sec: 10  # Reduced for faster iteration during debugging
+  
+  # Cost weights (MPCC uses its own cost, but these affect env rewards)
+  cost: quadratic
+  rew_state_weight: [5.0, 0.1, 5.0, 0.1, 0.1, 0.1]
+  rew_act_weight: [0.1, 0.1]
+  done_on_out_of_bound: false  # Disabled for debugging (don't terminate early)
+
+  # Constraints
+  constraints:
+  - constraint_form: default_constraint
+    constrained_variable: input
+  - constraint_form: default_constraint
+    constrained_variable: state
+

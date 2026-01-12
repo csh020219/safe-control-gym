@@ -1,0 +1,616 @@
+"""Utility functions for 2D MPCC (Model Predictive Contouring Control).
+
+This module provides:
+- Track generation from waypoints (Bezier interpolation)
+- Track loading and management
+- State conversion utilities
+- Control conversion utilities
+
+Based on: [https://github.com/mlab-upenn/mpcc](https://github.com/mlab-upenn/mpcc)
+"""
+
+import os
+import numpy as np
+from scipy.interpolate import CubicSpline
+from scipy.spatial.transform import Rotation
+
+
+# ═══════════════════════════════════════════════════════════
+# Track Generation (Bezier Interpolation)
+# ═══════════════════════════════════════════════════════════
+
+def interpolate_bezier(waypoints):
+    """Interpolate waypoints with cubic Bezier curves (cyclic boundary condition).
+    
+    Args:
+        waypoints (ndarray): Nx2 array of waypoints [x, y]
+        
+    Returns:
+        tuple: (a, b) control points
+            a (ndarray): Control points A (2xN)
+            b (ndarray): Control points B (2xN)
+    """
+    n = len(waypoints)
+    M = np.zeros([n, n])
+    
+    # Build M matrix (tridiagonal with cyclic boundary)
+    tridiagel = np.matrix([[1, 4, 1]])
+    for idx in range(n - 2):
+        M[idx + 1:idx + 2, idx:idx + 3] = tridiagel
+    
+    M[0, 0:2] = tridiagel[:, 1:3]
+    M[-1, -2:] = tridiagel[:, 0:2]
+    M[0:2, -1] = tridiagel[:, 0].reshape(1, -1)
+    M[-1, 0] = tridiagel[:, 0].reshape(1, -1)
+    
+    # Build solution vector
+    s = np.zeros([n, 2])
+    for idx in range(n - 1):
+        s[idx, :] = 2 * (2 * waypoints[idx, :] + waypoints[idx + 1, :])
+    s[-1:] = 2 * (2 * waypoints[-1, :] + waypoints[0, :])
+    
+    # Solve for control points a & b
+    Ax = np.linalg.solve(M, s[:, 0])
+    Ay = np.linalg.solve(M, s[:, 1])
+    
+    a = np.vstack([Ax, Ay])
+    b = np.zeros([2, n])
+    
+    b[:, :-1] = 2 * waypoints.T[:, 1:] - a[:, 1:]
+    b[:, -1] = 2 * waypoints.T[:, 0] - a[:, 0]
+    
+    return a, b
+
+
+def eval_bezier(waypoints, a, b, t):
+    """Evaluate Bezier curve at parameter t.
+    
+    Args:
+        waypoints (ndarray): Waypoints
+        a (ndarray): Bezier control points A
+        b (ndarray): Bezier control points B
+        t (float): Parameter (can be > n for multiple laps)
+        
+    Returns:
+        ndarray: [x, y] coordinates at parameter t
+    """
+    n = len(waypoints)
+    t = np.mod(t, n)
+    segment = int(np.floor(t))
+    
+    if segment >= n:
+        t = n - 0.0001
+        segment = n - 1
+    elif t < 0:
+        t = 0
+    
+    t_val = t - segment
+    
+    # Cubic Bezier formula
+    coords = (
+        np.power(1 - t_val, 3) * waypoints.T[:, segment] +
+        3 * np.power(1 - t_val, 2) * t_val * a[:, segment] +
+        3 * (1 - t_val) * np.power(t_val, 2) * b[:, segment] +
+        np.power(t_val, 3) * waypoints.T[:, int(np.mod(segment + 1, n))]
+    )
+    
+    return coords
+
+
+def get_angle_bezier(waypoints, a, b, t):
+    """Get tangent angle at parameter t.
+    
+    Args:
+        waypoints (ndarray): Waypoints
+        a (ndarray): Bezier control points A
+        b (ndarray): Bezier control points B
+        t (float): Parameter
+        
+    Returns:
+        float: Tangent angle (yaw) in radians
+    """
+    der = eval_bezier(waypoints, a, b, t + 0.1) - eval_bezier(waypoints, a, b, t)
+    phi = np.arctan2(der[1], der[0])
+    return phi
+
+
+def fit_arc_length_to_parameter(waypoints, a, b):
+    """Fit arc length s to parameter t using cubic spline.
+    
+    This creates the s-t relationship needed for MPCC.
+    
+    Args:
+        waypoints (ndarray): Waypoints
+        a (ndarray): Bezier control points A
+        b (ndarray): Bezier control points B
+        
+    Returns:
+        tuple: (ts_inverse, smax)
+            ts_inverse (CubicSpline): Spline function s -> t
+            smax (float): Maximum arc length (track length)
+    """
+    nwp = len(waypoints)
+    npoints = 20 * nwp
+    
+    # Compute approximate arc length
+    tvals = np.linspace(0, nwp, npoints + 1)
+    coords = []
+    for t in tvals:
+        coords.append(eval_bezier(waypoints, a, b, t))
+    coords = np.array(coords)
+    
+    dists = [0]
+    for idx in range(npoints):
+        dists.append(np.sqrt(np.sum(np.square(coords[idx, :] - coords[np.mod(idx + 1, npoints - 1), :]))))
+    dists = np.cumsum(np.array(dists))
+    smax = dists[-1]
+    
+    # Fit s-t relationship for two track revolutions (for horizon overshooting)
+    npoints = 2 * 20 * nwp
+    tvals = np.linspace(0, 2 * nwp, npoints + 1)
+    
+    coords = []
+    for t in tvals:
+        coords.append(eval_bezier(waypoints, a, b, np.mod(t, nwp)))
+    coords = np.array(coords)
+    
+    distsr = [0]
+    for idx in range(npoints):
+        distsr.append(np.sqrt(np.sum(np.square(coords[idx, :] - coords[np.mod(idx + 1, npoints - 1), :]))))
+    dists = np.cumsum(np.array(distsr))
+    
+    # Create inverse mapping: s -> t
+    ts_inverse = CubicSpline(dists, tvals)
+    
+    return ts_inverse, smax
+
+
+def generate_lookup_table_from_waypoints(waypoints, track_width=0.5, density=100):
+    """Generate MPCC lookup table from waypoints.
+    
+    Args:
+        waypoints (ndarray): Nx2 array of waypoints [x, y]
+        track_width (float): Half-width of track (m)
+        density (int): Points per meter in lookup table
+        
+    Returns:
+        tuple: (table, smax)
+            table (ndarray): Generated lookup table (Mx9)
+            smax (float): Track length (m)
+    """
+    print(f"[Track Generation] Processing {len(waypoints)} waypoints")
+    
+    # Bezier interpolation
+    a, b = interpolate_bezier(waypoints)
+    
+    # Fit arc length to parameter
+    ts_inverse, smax = fit_arc_length_to_parameter(waypoints, a, b)
+    
+    # Generate lookup table
+    lutable_density = density
+    npoints = int(np.floor(2 * smax * lutable_density))
+    
+    print(f"[Track Generation] Generating lookup table with {npoints} points")
+    
+    svals = np.linspace(0, 2 * smax, npoints)
+    tvals = ts_inverse(svals)
+    
+    # Compute table entries
+    # Format: [s, t, x, y, phi, cos_phi, sin_phi, g_upper, g_lower]
+    table = []
+    for idx in range(npoints):
+        # Track point
+        track_point = eval_bezier(waypoints, a, b, tvals[idx])
+        
+        # Tangent angle
+        phi = get_angle_bezier(waypoints, a, b, tvals[idx])
+        
+        # Normal vector
+        n = [-np.sin(phi), np.cos(phi)]
+        
+        # Track bounds (for constraints)
+        g_upper = track_width + track_point[0] * n[0] + track_point[1] * n[1]
+        g_lower = -track_width + track_point[0] * n[0] + track_point[1] * n[1]
+        
+        table.append([
+            svals[idx],      # Arc length
+            tvals[idx],      # Parameter
+            track_point[0],  # x
+            track_point[1],  # y
+            phi,             # Tangent angle
+            np.cos(phi),     # cos(phi)
+            np.sin(phi),     # sin(phi)
+            g_upper,         # Upper bound
+            g_lower          # Lower bound
+        ])
+    
+    table = np.array(table)
+    
+    print(f"[Track Generation] Track length: {smax:.2f} m")
+    
+    return table, smax
+
+
+# ═══════════════════════════════════════════════════════════
+# Example Track Generators
+# ═══════════════════════════════════════════════════════════
+
+def create_simple_oval(scale=10):
+    """Create simple oval track waypoints.
+    
+    Args:
+        scale (float): Scaling factor
+        
+    Returns:
+        ndarray: Nx2 array of waypoints
+    """
+    trackx = scale * np.array([
+        0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75,
+        0.8, 0.8, 0.8, 0.8, 0.75, 0.7, 0.6, 0.5, 0.4, 
+        0.3, 0.2, 0.1, 0.05, 0.0, 0.0, 0.0, 0.0
+    ])
+    tracky = scale * np.array([
+        0.05, 0.3, 0.4, 0.2, 0.2, 0.0, 0.0, 0.0, 0.05,
+        0.1, 0.2, 0.3, 0.4, 0.45, 0.5, 0.5, 0.3, 0.3,
+        0.5, 0.5, 0.5, 0.45, 0.4, 0.3, 0.2, 0.1
+    ])
+    waypoints = np.vstack([trackx, tracky]).T
+    return waypoints
+
+
+def create_figure_eight(radius=5):
+    """Create figure-8 track waypoints.
+    
+    Args:
+        radius (float): Radius of loops
+        
+    Returns:
+        ndarray: Nx2 array of waypoints
+    """
+    n = 20
+    theta = np.linspace(0, 2 * np.pi, n)
+    
+    # Figure-8 parametric
+    x = radius * np.sin(theta)
+    y = radius * np.sin(theta) * np.cos(theta)
+    
+    waypoints = np.vstack([x, y]).T
+    return waypoints
+
+
+def create_circle(radius=5, n_points=20):
+    """Create circular track waypoints.
+    
+    Args:
+        radius (float): Circle radius
+        n_points (int): Number of waypoints
+        
+    Returns:
+        ndarray: Nx2 array of waypoints
+    """
+    theta = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+    x = radius * np.cos(theta)
+    y = radius * np.sin(theta)
+    waypoints = np.vstack([x, y]).T
+    return waypoints
+
+
+# ═══════════════════════════════════════════════════════════
+# Track Management
+# ═══════════════════════════════════════════════════════════
+
+class TrackManager:
+    """Manages track lookup table for MPCC.
+    
+    Can either:
+    1. Load pre-generated lookup table from CSV
+    2. Generate lookup table from waypoints on-the-fly
+    """
+    
+    def __init__(self, track_file=None, waypoints=None, track_width=0.5, 
+                 density=100, closed=True, cache_dir='tracks'):
+        """Initialize track manager.
+        
+        Args:
+            track_file (str): Path to lookup table CSV (*_lutab.csv) OR waypoints CSV
+            waypoints (ndarray): Nx2 array of waypoints (alternative to track_file)
+            track_width (float): Half-width of track (m)
+            density (int): Points per meter in lookup table
+            closed (bool): Whether track is closed loop
+            cache_dir (str): Directory to cache generated lookup tables
+        """
+        self.closed = closed
+        self.cache_dir = cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Determine how to load/generate track
+        if track_file is not None:
+            # Check if it's a lookup table or waypoints
+            if track_file.endswith('_lutab.csv'):
+                # Load existing lookup table
+                print(f"[TrackManager] Loading lookup table: {track_file}")
+                self.track_table = np.loadtxt(track_file, delimiter=',')
+            else:
+                # Load waypoints and generate lookup table
+                print(f"[TrackManager] Loading waypoints: {track_file}")
+                waypoints_loaded = np.loadtxt(track_file, delimiter=',')
+                
+                # Check if cached lookup table exists
+                cache_file = self._get_cache_filename(track_file)
+                if os.path.exists(cache_file):
+                    print(f"[TrackManager] Using cached lookup table: {cache_file}")
+                    self.track_table = np.loadtxt(cache_file, delimiter=',')
+                else:
+                    print(f"[TrackManager] Generating lookup table...")
+                    self.track_table, smax = generate_lookup_table_from_waypoints(
+                        waypoints_loaded, track_width, density
+                    )
+                    # Save to cache
+                    np.savetxt(cache_file, self.track_table, delimiter=',')
+                    print(f"[TrackManager] Cached to: {cache_file}")
+        
+        elif waypoints is not None:
+            # Generate from provided waypoints
+            print(f"[TrackManager] Generating lookup table from waypoints...")
+            self.track_table, smax = generate_lookup_table_from_waypoints(
+                waypoints, track_width, density
+            )
+        
+        else:
+            raise ValueError("Must provide either track_file or waypoints")
+        
+        # Ensure 2D array
+        if self.track_table.ndim == 1:
+            self.track_table = self.track_table.reshape(1, -1)
+        
+        # Extract track properties
+        self.n_points = len(self.track_table)
+        self.s_max = self.track_table[-1, 0]
+        self.reference_path = self.track_table[:, 2:4]
+        
+        print(f"[TrackManager] Track ready: {self.n_points} points, length={self.s_max:.2f}m")
+    
+    def _get_cache_filename(self, waypoints_file):
+        """Get cache filename for waypoints file.
+        
+        Args:
+            waypoints_file (str): Path to waypoints file
+            
+        Returns:
+            str: Cache file path
+        """
+        base = os.path.splitext(os.path.basename(waypoints_file))[0]
+        return os.path.join(self.cache_dir, f'{base}_lutab.csv')
+    
+    def get_track_info(self, theta):
+        """Get track information at progress variable theta.
+        
+        Args:
+            theta (float): Progress along path (arc length, same as 's')
+            
+        Returns:
+            dict: Track information at theta with keys:
+                - 's': arc length
+                - 't': parameter
+                - 'x', 'y': position
+                - 'phi': tangent angle
+                - 'cos_phi', 'sin_phi': angle components
+                - 'g_upper', 'g_lower': track bounds
+        """
+        # Handle closed/open track
+        if self.closed:
+            theta = theta % self.s_max
+        else:
+            theta = np.clip(theta, 0, self.s_max)
+        
+        # Find nearest point in lookup table
+        idx = np.argmin(np.abs(self.track_table[:, 0] - theta))
+        info = self.track_table[idx]
+        
+        return {
+            's': info[0],
+            't': info[1],
+            'x': info[2],
+            'y': info[3],
+            'phi': info[4],
+            'cos_phi': info[5],
+            'sin_phi': info[6],
+            'g_upper': info[7] if len(info) > 7 else 0.5,
+            'g_lower': info[8] if len(info) > 8 else -0.5,
+        }
+    
+    def get_track_params(self, theta):
+        """Get track parameters for ACADOS solver.
+        
+        Args:
+            theta (float): Progress variable
+            
+        Returns:
+            ndarray: [x_ref, y_ref, cos_phi, sin_phi] (4D)
+        """
+        info = self.get_track_info(theta)
+        return np.array([
+            info['x'],
+            info['y'],
+            info['cos_phi'],
+            info['sin_phi']
+        ])
+    
+    def compute_errors(self, pos_xy, theta):
+        """Compute MPCC contouring and lag errors.
+        
+        Args:
+            pos_xy (ndarray): Current 2D position [x, y]
+            theta (float): Current progress variable
+            
+        Returns:
+            tuple: (e_c, e_l)
+                e_c (float): Contouring error (perpendicular, m)
+                e_l (float): Lag error (tangential, m)
+        """
+        info = self.get_track_info(theta)
+        
+        dx = pos_xy[0] - info['x']
+        dy = pos_xy[1] - info['y']
+        
+        # Contouring error (perpendicular to path)
+        e_c = -dx * info['sin_phi'] + dy * info['cos_phi']
+        
+        # Lag error (tangential to path)
+        e_l = dx * info['cos_phi'] + dy * info['sin_phi']
+        
+        return e_c, e_l
+
+
+# ═══════════════════════════════════════════════════════════
+# State/Control Conversion
+# ═══════════════════════════════════════════════════════════
+
+def obs_to_mpcc_state(obs, theta, env=None):
+    """Convert environment observation to MPCC state (2D).
+    
+    Supports multiple environment types:
+    - 12D Quadrotor: [x, y, z, vx, vy, vz, roll, pitch, yaw, wx, wy, wz]
+    - 6D Planar: [x, y, vx, vy, yaw, yaw_rate]
+    - Custom: Uses env.STATE_LABELS if available
+    
+    Args:
+        obs (ndarray): Environment observation
+        theta (float): Current progress variable
+        env: Environment (optional, for robust state indexing)
+        
+    Returns:
+        ndarray: MPCC state [x, y, vx, vy, yaw, yaw_rate, theta] (7D)
+    """
+    obs = np.atleast_1d(obs)
+    
+    # Option 1: Use environment's state labels (most robust)
+    if env is not None and hasattr(env, 'STATE_LABELS'):
+        labels = env.STATE_LABELS
+        try:
+            x = obs[labels.index('x')]
+            y = obs[labels.index('y')]
+            vx = obs[labels.index('x_dot')]
+            vy = obs[labels.index('y_dot')]
+            yaw = obs[labels.index('psi')]
+            
+            # Yaw rate might have different names
+            if 'p' in labels:
+                yaw_rate = obs[labels.index('p')]
+            elif 'psi_dot' in labels:
+                yaw_rate = obs[labels.index('psi_dot')]
+            elif 'r' in labels:
+                yaw_rate = obs[labels.index('r')]
+            else:
+                yaw_rate = 0.0
+                
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Environment STATE_LABELS missing required fields: {e}")
+    
+    # Option 2: Auto-detect based on observation dimension
+    elif len(obs) == 6:
+        # Planar Quadrotor or 2D system
+        # Assume: [x, y, vx, vy, yaw, yaw_rate]
+        x = obs[0]
+        y = obs[1]
+        vx = obs[2]
+        vy = obs[3]
+        yaw = obs[4]
+        yaw_rate = obs[5]
+        
+    elif len(obs) == 12:
+        # Full 3D Quadrotor
+        # [x, y, z, vx, vy, vz, roll, pitch, yaw, wx, wy, wz]
+        x = obs[0]
+        y = obs[1]
+        vx = obs[3]
+        vy = obs[4]
+        yaw = obs[8]
+        yaw_rate = obs[11]
+        
+    elif len(obs) == 10:
+        # Another common format
+        # [x, y, z, vx, vy, vz, yaw, pitch, roll, yaw_rate]
+        x = obs[0]
+        y = obs[1]
+        vx = obs[3]
+        vy = obs[4]
+        yaw = obs[6]
+        yaw_rate = obs[9]
+        
+    else:
+        raise ValueError(
+            f"Unsupported observation dimension: {len(obs)}. "
+            f"Expected 6, 10, or 12. "
+            f"If using custom environment, ensure env.STATE_LABELS is defined."
+        )
+    
+    state = np.array([x, y, vx, vy, yaw, yaw_rate, theta])
+    return state
+
+
+def mpcc_control_to_action(u_mpcc, obs, env, fixed_altitude=1.0):
+    """Convert MPCC control to environment action.
+    
+    MPCC outputs high-level control [ax, ay, yaw_rate_cmd, v_theta].
+    This function converts it to low-level quadrotor action [thrust, tau_x, tau_y, tau_z].
+    
+    Args:
+        u_mpcc (ndarray): MPCC control [ax, ay, yaw_rate_cmd, v_theta] (4D)
+        obs (ndarray): Current observation (6D or 12D)
+        env: Environment (for mass, gravity, action limits)
+        fixed_altitude (float): Desired altitude (m)
+        
+    Returns:
+        ndarray: Environment action [thrust, tau_x, tau_y, tau_z] (4D)
+    """
+    obs = np.atleast_1d(obs)
+    
+    # Extract MPCC commands
+    ax_des = u_mpcc[0]
+    ay_des = u_mpcc[1]
+    yaw_rate_cmd = u_mpcc[2]
+    # v_theta = u_mpcc[3]  # Not used in action conversion
+    
+    # Extract current state based on obs dimension
+    if len(obs) == 6:
+        # Planar quadrotor: [x, y, vx, vy, yaw, yaw_rate]
+        z = fixed_altitude  # Assume at desired altitude
+        vz = 0.0            # Assume no vertical velocity
+        yaw = obs[4]
+        
+    elif len(obs) == 12:
+        # Full 3D quadrotor: [x, y, z, vx, vy, vz, roll, pitch, yaw, wx, wy, wz]
+        z = obs[2]
+        vz = obs[5]
+        yaw = obs[8]
+        
+    else:
+        raise ValueError(f"Unsupported obs dimension: {len(obs)}. Expected 6 or 12.")
+    
+    # 1. Altitude control (PD controller)
+    kp_z = 10.0
+    kd_z = 5.0
+    thrust = env.MASS * env.GRAVITY_ACC + kp_z * (fixed_altitude - z) - kd_z * vz
+    
+    # 2. XY acceleration to body torques
+    R_yaw = Rotation.from_euler('z', yaw)
+    a_world = np.array([ax_des, ay_des, 0.0])
+    a_body = R_yaw.inv().apply(a_world)
+    
+    k_pitch = 0.1
+    k_roll = 0.1
+    tau_x = a_body[0] * k_pitch
+    tau_y = a_body[1] * k_roll
+    
+    # 3. Yaw rate control
+    k_yaw = 0.05
+    tau_z = yaw_rate_cmd * k_yaw
+    
+    # 4. Assemble action and clip to limits
+    action = np.array([thrust, tau_x, tau_y, tau_z])
+    
+    if hasattr(env, 'action_space'):
+        action = np.clip(action, env.action_space.low, env.action_space.high)
+    
+    return action

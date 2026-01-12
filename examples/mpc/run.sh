@@ -24,5 +24,5 @@ python3 ./mpc_experiment.py \
     --algo ${ALGO} \
     --overrides \
         ./config_overrides/${SYS}/${SYS}_${TASK}.yaml \
-        ./config_overrides/${SYS}/${ALGO}_${SYS}_${TASK}.yaml
-        #./config_overrides/quadrotor_3D/traj_override_circle.yaml
+        ./config_overrides/${SYS}/${ALGO}_${SYS}_${TASK}.yaml \
+        ./config_overrides/${SYS}/traj_override_figure8.yaml

@@ -1,0 +1,76 @@
+# MPCC (Model Predictive Contouring Control) Configuration
+# Based on traditional MPCC cost: J = Qc*e_c² + Ql*e_l² - Q_theta*v_theta + R*u²
+
+mpcc:
+  # ═══════════════════════════════════════════════════════════
+  # MPC Horizon
+  # ═══════════════════════════════════════════════════════════
+  horizon: 20
+  
+  # ═══════════════════════════════════════════════════════════
+  # Traditional MPCC Cost Weights
+  # Stage cost: Qc*e_c² + Ql*e_l² - Q_theta*v_theta + R_ax*ax² + R_ay*ay² + R_yaw*yaw²
+  # ═══════════════════════════════════════════════════════════
+  q_contour: 1.0          # Contouring error weight (Qc) - perpendicular to path
+  q_lag: 100.0            # Lag error weight (Ql) - tangential to path
+  q_v_theta: 0.1          # Progress rate weight (Q_theta) - MAXIMIZES path progress
+  
+  # Control smoothness weights (R)
+  r_accel: [0.1, 0.1]     # Acceleration weights [ax, ay]
+  r_yaw_rate: 0.1         # Yaw rate control weight
+  
+  # Legacy weights (not used in traditional MPCC, kept for compatibility)
+  q_vel: [0.1, 0.1]       # Velocity weights [vx, vy] - not used
+  q_yaw: 0.1              # Yaw angle weight - not used
+  q_yaw_rate: 0.01        # Yaw rate weight - not used
+  
+  # ═══════════════════════════════════════════════════════════
+  # Control Limits
+  # ═══════════════════════════════════════════════════════════
+  accel_limits: [-3.0, 3.0]       # Acceleration limits [min, max] (m/s²)
+  yaw_rate_limits: [-1.5, 1.5]    # Yaw rate limits [min, max] (rad/s)
+  v_theta_limits: [0.01, 2.0]     # Progress rate limits [min, max] (m/s)
+  
+  # ═══════════════════════════════════════════════════════════
+  # Track Configuration
+  # ═══════════════════════════════════════════════════════════
+  # Option 1: Load from file
+  # track_file: 'path/to/track.csv'
+  
+  # Option 2: Use environment trajectory (env.X_GOAL)
+  use_env_trajectory: true
+  env_trajectory_sample_rate: 2   # Waypoints per second
+  
+  # Option 3: Built-in tracks ('simple_oval', 'figure_eight', 'circle_builtin')
+  track_name: 'circle'
+  track_scale: 1.0                # Scaling factor for built-in tracks
+  
+  # Track properties
+  track_width: 0.5                # Half-width of track bounds (m)
+  track_density: 100              # Points per meter in lookup table
+  track_closed: true              # Whether track is closed loop
+  track_cache_dir: 'tracks'       # Directory to cache generated lookup tables
+  
+  # ═══════════════════════════════════════════════════════════
+  # Flight Configuration
+  # ═══════════════════════════════════════════════════════════
+  fixed_altitude: 1.0             # Fixed altitude for 2D flight (m)
+  
+  # ═══════════════════════════════════════════════════════════
+  # Solver Settings (ACADOS)
+  # ═══════════════════════════════════════════════════════════
+  qp_solver: 'PARTIAL_CONDENSING_HPIPM'
+  integrator_type: 'ERK'          # Explicit Runge-Kutta
+  nlp_solver_type: 'SQP'          # Sequential Quadratic Programming
+  nlp_solver_max_iter: 20
+  qp_solver_iter_max: 50
+  
+  # ═══════════════════════════════════════════════════════════
+  # Terminal Cost
+  # ═══════════════════════════════════════════════════════════
+  use_terminal_cost: true
+  
+  # ═══════════════════════════════════════════════════════════
+  # Debug
+  # ═══════════════════════════════════════════════════════════
+  verbose: false

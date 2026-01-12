@@ -1,0 +1,22 @@
+# Trajectory override for figure8 - same as MPCC config
+task_config:
+  task_info:
+    trajectory_type: figure8
+    num_cycles: 2
+    trajectory_plane: 'xz'
+    trajectory_position_offset: [0, 1.0]
+    trajectory_scale: 0.7
+  
+  # Fixed initial state (same as MPCC)
+  init_state:
+    init_x: 0.7
+    init_x_dot: 0.0
+    init_z: 1.0
+    init_z_dot: 0.0
+    init_theta: 0.0
+    init_theta_dot: 0.0
+  randomized_init: false
+  
+  episode_len_sec: 10
+  done_on_out_of_bound: false
+
